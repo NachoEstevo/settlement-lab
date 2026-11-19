@@ -2,6 +2,18 @@ plugins {
     id 'application'
 }
 
+version = '0.1.0'
+
+distributions.main.contents {
+    from('compose.yaml')
+    from('docs/distribution.md') {
+        rename { 'README.md' }
+    }
+    from(projectDir) {
+        include 'LICENSE', 'LICENSE.*', 'THIRD_PARTY_NOTICES*', 'notices/**'
+    }
+}
+
 repositories {
     mavenCentral()
 }
