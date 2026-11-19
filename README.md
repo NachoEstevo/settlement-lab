@@ -6,6 +6,8 @@ docker compose up -d --wait
 
 # Settlement Lab
 
+The v0.1.0 ZIP includes launchers for Windows and Linux. [Private release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.1.0) · [Run the distribution](docs/distribution.md)
+
 A, B and C have 20 units each and owe 100 around a ring. None can pay first. Together they can settle 300 with 60 units of cash, unless C cancels its payment first. The two commands race cancellation against settlement on independent PostgreSQL 18 connections. Each creates a fresh domain with the same opening balances and obligations.
 
 Run the quickstart from the checkout with JDK 21 and Docker Compose in Windows PowerShell or a Linux shell. Set `JAVA_HOME` to the JDK directory when another Java version is the default. In Windows Command Prompt use `gradlew.bat` for `./gradlew`. Compose downloads the pinned database image and the Gradle Wrapper downloads the build tools and dependencies on first use.
