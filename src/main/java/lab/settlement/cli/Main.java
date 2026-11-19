@@ -15,6 +15,7 @@ public final class Main {
             pg submit DOMAIN COMMAND PAYMENT FROM TO AMOUNT
             pg cancel DOMAIN COMMAND PAYMENT
             pg cycle DOMAIN fifo|heuristic WINDOW [COMMAND BATCH]
+            pg capacity [WORKERS PAYMENTS WINDOW SEED]
             pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION [--policy fifo|heuristic] PAYMENT...
             pg receipt DOMAIN COMMAND
             pg payment DOMAIN PAYMENT
@@ -32,6 +33,7 @@ public final class Main {
             demo cycle --race cancel-first   Cancel C's payment before proposing the group.
             demo unequal                     Propose a 100/100/90 cycle with zero opening funds.
             demo selection                   Compare policies against two hand-calculated optima.
+            benchmark economic [SEED [WINDOW]]  Write the three fixed-tick workloads as JSON.
             --help, -h                       Show this help.
 
             The in-memory examples use sequential order. The pg race waits until
@@ -56,6 +58,9 @@ public final class Main {
         if (command.equals(List.of("demo", "selection"))) {
             SelectionDemo.run(out);
             return 0;
+        }
+        if (command.getFirst().equals("benchmark")) {
+            return BenchmarkCommands.economic(command, out, err);
         }
 
         Demo demo;

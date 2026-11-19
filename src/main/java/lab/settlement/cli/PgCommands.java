@@ -95,6 +95,7 @@ final class PgCommands {
             }
             case "settle" -> settle(args, out, authority);
             case "cycle" -> cycle(args, out, db);
+            case "capacity" -> BenchmarkCommands.capacity(args, db, out);
             case "receipt" -> {
                 require(args.size() == 4, "pg receipt DOMAIN COMMAND");
                 authority.receipt(id(args.get(2)), id(args.get(3)))

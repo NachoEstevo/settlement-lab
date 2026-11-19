@@ -62,6 +62,15 @@ In the 100/100/100 ring, strict FIFO stops at the first payment and the multilat
 
 For a persisted domain, `pg cycle DOMAIN fifo 32` or `pg cycle DOMAIN heuristic 32` attempts one batch. The CLI prints how many payments it inspected, whether the queue extends past the window, and the snapshot revision. A nonempty proposal includes a `replay=` line before the write. Use that exact `pg settle` command after an interrupted response. Each new `pg cycle` reads a fresh snapshot. Use `pg receipt DOMAIN COMMAND` to retrieve an existing decision.
 
+## Reproduce the benchmarks
+
+```sh
+./gradlew -q run --args="benchmark economic 20261119 32"
+./gradlew -q run --args="pg capacity 4 96 8 42"
+```
+
+The first command compares both policies on the same eight-tick schedules and writes a JSON report. It includes the inputs, batch choices, settled volume, remaining payments and waiting times by sender. The second command creates a fresh PostgreSQL domain and measures independent workers contending for it. Its timings cover selection, the lock statement, validation and writes, commit, and the full nonempty cycle. [Economic results](docs/economic-benchmark.md) · [Capacity measurements and environment](docs/capacity-benchmark.md)
+
 ## Settlement rules
 
 The demo uses one simulated currency, `SIM`, with scale 0. One integer unit is the smallest transferable amount. Accounts open with a balance between 0 and `Long.MAX_VALUE`. Obligations may exceed the sender's available balance at submission.
@@ -74,6 +83,8 @@ stateDiagram-v2
 ```
 
 A batch names 1 to 128 distinct queued payments. For each participant the ledger computes `current balance + incoming − outgoing` across the complete proposal. It uses `BigInteger` for the calculation and gross volume. Each batch must keep every closing balance in range and conserve the total cash of the accounts it touches. The system total therefore stays equal to the sum of its openings. A successful batch records its ID on every member. Both terminal states are permanent for the life of that ledger.
+
+The command reference includes optional arguments, exit codes, default settings and how to retry an uncertain commit. [CLI reference](docs/cli.md)
 
 ## Tests
 

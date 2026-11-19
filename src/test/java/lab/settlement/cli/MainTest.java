@@ -78,6 +78,16 @@ class MainTest {
         assertTrue(demo.out().contains("heuristic-v1 queue_positions=[1] gross=4 gap=1 (20%)"));
     }
 
+    @Test
+    void benchmarkDefaultsAreReproducibleAndInvalidCapacityStopsBeforeConnecting() {
+        var defaults = invoke("benchmark", "economic");
+        assertEquals(0, defaults.exitCode());
+        assertTrue(defaults.out().contains("\"workload\":\"blocked-rings\""));
+        assertEquals(defaults, invoke("benchmark", "economic", "20261119", "32"));
+        assertEquals(2, invoke("benchmark", "economic", "42", "129").exitCode());
+        assertEquals(2, invoke("pg", "capacity", "0", "12", "2", "42").exitCode());
+    }
+
     private static Run invoke(String... args) {
         var out = new ByteArrayOutputStream();
         var err = new ByteArrayOutputStream();
