@@ -24,6 +24,8 @@ dependencies {
     runtimeOnly 'org.flywaydb:flyway-database-postgresql:13.13.0'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.23.0'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
+    testImplementation 'net.jqwik:jqwik-api:1.9.3'
+    testRuntimeOnly 'net.jqwik:jqwik-engine:1.9.3'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -37,6 +39,7 @@ tasks.named('test') {
 
 tasks.withType(Test).configureEach {
     systemProperty 'user.timezone', 'UTC'
+    systemProperty 'jqwik.database', layout.buildDirectory.file("${name}.jqwik-database").get().asFile
 }
 
 sourceSets {
