@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,6 +31,41 @@ class HistoryVerifierTest {
         assertEquals(new HistoryVerifier.Summary(2, 1, 1, 0, 1, BigInteger.TEN,
                         BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.TEN)),
                 HistoryVerifier.verify(file));
+    }
+
+    @Test
+    void everyMonetaryFieldRequiresACanonicalAsciiDecimalString() throws IOException {
+        var valid = fixture();
+        var file = directory.resolve("invalid-money.json");
+        var fields = Map.of("opening", "accounts", "balance", "accounts", "amount", "payments", "gross", "receipts");
+        for (var field : fields.entrySet()) {
+            for (var token : List.of("20", "20.0", "2e1", "\"2e1\"", "\"20.0\"", "\"+20\"", "\"00020\"",
+                    "\" 20 \"", "\"-0\"", "\"-20\"", "\"２０\"", "\"\"", "null")) {
+                var export = valid.deepCopy();
+                first(export, field.getValue()).set(field.getKey(), JSON.readTree(token));
+                JSON.writeValue(file.toFile(), export);
+                var error = assertThrows(IOException.class, () -> HistoryVerifier.verify(file), field.getKey() + "=" + token);
+                assertTrue(error.getMessage().contains("canonical nonnegative decimal string"), error::getMessage);
+            }
+        }
+    }
+
+    @Test
+    void balancesAndPaymentAmountsFitSignedLongWhileGrossMayExceedIt() throws IOException {
+        var valid = fixture();
+        var file = directory.resolve("large-money.json");
+        String large = "18446744073709551614";
+        var bounded = Map.of("opening", "accounts", "balance", "accounts", "amount", "payments");
+        for (var field : bounded.entrySet()) {
+            var export = valid.deepCopy();
+            first(export, field.getValue()).put(field.getKey(), large);
+            JSON.writeValue(file.toFile(), export);
+            var error = assertThrows(IOException.class, () -> HistoryExport.read(file));
+            assertTrue(error.getMessage().contains("exceeds the supported integer range"), error::getMessage);
+        }
+        first(valid, "receipts").put("gross", large);
+        JSON.writeValue(file.toFile(), valid);
+        assertEquals(new BigInteger(large), HistoryExport.read(file).receipts().getFirst().gross());
     }
 
     @Test
