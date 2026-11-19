@@ -50,6 +50,14 @@ final class PgCommands {
 
     private static void runDatabaseCommand(List<String> args, PrintStream out) throws SQLException, IOException {
         require(args.size() >= 2, "pg COMMAND (see --help)");
+        if (args.get(1).equals("worker")) {
+            require(args.size() == 2, "pg worker");
+            if (System.getenv().getOrDefault("SETTLEMENT_JDBC_URL", "").isBlank()) {
+                throw new IllegalArgumentException("pg worker requires an explicit SETTLEMENT_JDBC_URL.");
+            }
+            new PgWorker(Database.fromEnvironment(), out).serve(System.in);
+            return;
+        }
         Database db = Database.fromEnvironment();
         PgAuthority authority = new PgAuthority(db);
         switch (args.get(1)) {
@@ -170,7 +178,7 @@ final class PgCommands {
         };
     }
 
-    private static UUID id(String value) {
+    static UUID id(String value) {
         UUID id = UUID.fromString(value);
         if (!id.toString().equalsIgnoreCase(value)) {
             throw new IllegalArgumentException("Expected a standard UUID: " + value);

@@ -103,8 +103,15 @@ public final class PgAuthority {
     }
 
     public Optional<Receipt> receipt(UUID domain, UUID command) throws SQLException {
+        return storedReceipt(domain, command).map(StoredReceipt::receipt);
+    }
+
+    /** A command's immutable request and result, read through a fresh physical connection. */
+    public record StoredReceipt(String kind, String payload, Receipt receipt) {}
+
+    public Optional<StoredReceipt> storedReceipt(UUID domain, UUID command) throws SQLException {
         try (var c = db.open()) {
-            return lookup(c, domain, command).map(Saved::receipt);
+            return lookup(c, domain, command);
         }
     }
 
@@ -129,7 +136,7 @@ public final class PgAuthority {
                 var saved = lookup(c, domain, command);
                 Receipt result;
                 if (saved.isPresent()) {
-                    Saved original = saved.get();
+                    StoredReceipt original = saved.get();
                     result = original.kind.equals(kind) && original.payload.equals(payload) ? original.receipt
                             : Receipt.at("COMMAND_ID_CONFLICT", "The command ID belongs to a different request.",
                                     original.receipt.revision());
@@ -155,7 +162,7 @@ public final class PgAuthority {
                 }
                 hooks.beforeCommit(c);
                 commitStarted = true;
-                c.commit();
+                Database.commitConfirmed(c);
                 hooks.afterCommit(c);
                 return result;
             } catch (SQLException | RuntimeException failure) {
@@ -195,9 +202,7 @@ public final class PgAuthority {
         }
     }
 
-    private record Saved(String kind, String payload, Receipt receipt) {}
-
-    private static Optional<Saved> lookup(Connection c, UUID domain, UUID command) throws SQLException {
+    private static Optional<StoredReceipt> lookup(Connection c, UUID domain, UUID command) throws SQLException {
         try (var ps = statement(c, """
                 SELECT kind, payload, outcome, detail, batch_id, state_revision, gross_minor
                 FROM command_receipt WHERE domain_id = ? AND command_id = ?
@@ -209,7 +214,7 @@ public final class PgAuthority {
             var receipt = new Receipt(rows.getString("outcome"), rows.getString("detail"),
                     rows.getObject("batch_id", UUID.class), rows.getLong("state_revision"),
                     rows.getBigDecimal("gross_minor").toBigIntegerExact());
-            return Optional.of(new Saved(rows.getString("kind"), rows.getString("payload"), receipt));
+            return Optional.of(new StoredReceipt(rows.getString("kind"), rows.getString("payload"), receipt));
         }
     }
 }

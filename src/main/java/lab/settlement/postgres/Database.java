@@ -36,6 +36,18 @@ public final class Database {
         return source.getConnection();
     }
 
+    static void commitConfirmed(Connection connection) throws SQLException {
+        connection.clearWarnings();
+        connection.commit();
+        // PostgreSQL can cancel a synchronous replication wait after the local commit.
+        // pgJDBC reports that case as a connection warning, even though commit() returned.
+        var warning = connection.getWarnings();
+        if (warning != null) {
+            throw new SQLException("COMMIT returned a warning; the requested durability is unknown.",
+                    "08007", warning);
+        }
+    }
+
     public void migrate() {
         Flyway.configure().dataSource(source).locations("classpath:db/migration").load().migrate();
     }
@@ -64,7 +76,7 @@ public final class Database {
                 }
                 insertAccount.executeBatch();
             }
-            connection.commit();
+            commitConfirmed(connection);
         }
     }
 }

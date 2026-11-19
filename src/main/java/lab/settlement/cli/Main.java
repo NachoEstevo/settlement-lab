@@ -11,6 +11,7 @@ public final class Main {
             PostgreSQL 18 (each race creates a fresh domain):
             pg race cancel-first|settle-first [--drop-reply]
             pg migrate
+            pg worker                         Serve failover experiment requests as NDJSON (explicit JDBC URL).
             pg init DOMAIN ACCOUNT=OPENING...
             pg submit DOMAIN COMMAND PAYMENT FROM TO AMOUNT
             pg cancel DOMAIN COMMAND PAYMENT
