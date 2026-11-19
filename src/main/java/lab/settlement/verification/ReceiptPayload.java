@@ -7,7 +7,13 @@ import java.util.UUID;
 /** Decoder for the normalized command fields stored in version 1 history. */
 final class ReceiptPayload {
     record Admission(UUID payment, UUID from, UUID to, long amount) {}
-    record Proposal(UUID batch, long snapshot, List<UUID> members) {}
+    record Proposal(UUID batch, long snapshot, String policy, List<UUID> members) {}
+
+    static final String FIFO = "fifo-v1";
+
+    static boolean knownPolicy(String policy) {
+        return "multilateral-v1".equals(policy) || "heuristic-v1".equals(policy) || FIFO.equals(policy);
+    }
 
     private ReceiptPayload() {}
 
@@ -24,7 +30,7 @@ final class ReceiptPayload {
 
     static Proposal settle(String payload) {
         var fields = fields(payload, "batch", "snapshot", "policy", "members");
-        if (!fields[2].equals("multilateral-v1")) throw new IllegalArgumentException("Unknown policy");
+        if (!knownPolicy(fields[2])) throw new IllegalArgumentException("Unknown policy");
         String[] rawIds = fields[3].split(",", -1);
         if (rawIds.length > 128) throw new IllegalArgumentException("Too many members");
         var members = new ArrayList<UUID>(rawIds.length);
@@ -34,7 +40,7 @@ final class ReceiptPayload {
             }
             members.add(uuid(rawIds[i]));
         }
-        return new Proposal(uuid(fields[0]), number(fields[1]), List.copyOf(members));
+        return new Proposal(uuid(fields[0]), number(fields[1]), fields[2], List.copyOf(members));
     }
 
     private static String[] fields(String payload, String... names) {

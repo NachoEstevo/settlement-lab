@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,6 +28,7 @@ public final class HistoryVerifier {
     private final Map<Long, List<History.Receipt>> decisions = new HashMap<>();
     private final Map<UUID, BigInteger> balances = new HashMap<>();
     private final Map<UUID, String> states = new HashMap<>();
+    private final Set<UUID> queue = new LinkedHashSet<>();
     private final Map<UUID, UUID> memberships = new HashMap<>();
     private final Set<UUID> committedBatches = new HashSet<>();
     private final Set<UUID> mutations = new HashSet<>();
@@ -122,6 +124,7 @@ public final class HistoryVerifier {
         check(payload(payment).equals(receipt.payload()), "Admission receipt and payment terms disagree for " + id);
         check(payment.queueSeq() == (long) states.size() + 1, "Unexpected queue sequence for payment " + id);
         check(states.putIfAbsent(id, "QUEUED") == null, "Payment admitted twice " + id);
+        queue.add(id);
     }
 
     private void cancel(History.Receipt receipt, UUID id) {
@@ -129,6 +132,7 @@ public final class HistoryVerifier {
                 && receipt.payload().equals("payment=" + id), "Invalid cancellation receipt for payment " + id);
         check("QUEUED".equals(states.get(id)), "Cancelled payment was not queued " + id);
         states.put(id, "CANCELLED");
+        queue.remove(id);
     }
 
     private void settle(History.Receipt receipt, List<UUID> ids) {
@@ -136,7 +140,7 @@ public final class HistoryVerifier {
         check("COMMITTED".equals(receipt.outcome()) && batch != null && batch.commitRevision() == revision,
                 "Missing committed batch for command " + receipt.commandId());
         check(batch.snapshotRevision() >= 0 && batch.snapshotRevision() < revision
-                && "multilateral-v1".equals(batch.policyVersion()), "Invalid proposal for batch " + batch.id());
+                && ReceiptPayload.knownPolicy(batch.policyVersion()), "Invalid proposal for batch " + batch.id());
         check(committedBatches.add(batch.id()), "Repeated batch " + batch.id());
         check(ids.size() <= 128, "Oversized batch " + batch.id());
         var seen = new HashSet<UUID>();
@@ -147,6 +151,10 @@ public final class HistoryVerifier {
         String command = "batch=" + batch.id() + ";snapshot=" + batch.snapshotRevision()
                 + ";policy=" + batch.policyVersion() + ";members=" + members;
         check(receipt.payload().equals(command), "Receipt and event members or terms disagree for batch " + batch.id());
+        if (ReceiptPayload.FIFO.equals(batch.policyVersion())) {
+            String violation = fifoViolation(ids);
+            if (violation != null) throw invalid(violation + " in batch " + batch.id());
+        }
         BigInteger batchGross = BigInteger.ZERO;
         var changed = new HashSet<UUID>();
         for (UUID id : ids) {
@@ -160,6 +168,7 @@ public final class HistoryVerifier {
             changed.add(payment.from());
             changed.add(payment.to());
             states.put(id, "SETTLED");
+            queue.remove(id);
             memberships.put(id, batch.id());
             batchGross = batchGross.add(amount);
         }
@@ -218,6 +227,7 @@ public final class HistoryVerifier {
             return receipt.outcome().equals("BATCH_ID_CONFLICT") && proposal.batch().equals(receipt.batchId());
         }
         if (!rejected) return false;
+        if (ReceiptPayload.FIFO.equals(proposal.policy())) return fifoViolation(proposal.members()) != null;
         var deltas = new HashMap<UUID, BigInteger>();
         for (UUID id : proposal.members()) {
             if (!"QUEUED".equals(states.get(id))) return true;
@@ -230,6 +240,29 @@ public final class HistoryVerifier {
             BigInteger closing = balances.get(entry.getKey()).add(entry.getValue());
             return closing.signum() < 0 || closing.compareTo(MAX_BALANCE) > 0;
         });
+    }
+
+    // Use the queue reconstructed from admissions and terminal events at this revision.
+    // Receipt member order is canonical by ID, independent of the persisted queue sequence.
+    private String fifoViolation(List<UUID> members) {
+        var requested = new HashSet<>(members);
+        var head = queue.iterator();
+        var running = new HashMap<UUID, BigInteger>();
+        for (int i = 0; i < members.size(); i++) {
+            if (!head.hasNext()) return "FIFO proposal exceeds the queued prefix";
+            UUID id = head.next();
+            if (!requested.contains(id)) return "FIFO proposal skips queued payment " + id;
+            var payment = payments.get(id);
+            BigInteger amount = BigInteger.valueOf(payment.amount());
+            BigInteger debit = running.getOrDefault(payment.from(), balances.get(payment.from())).subtract(amount);
+            BigInteger credit = running.getOrDefault(payment.to(), balances.get(payment.to())).add(amount);
+            if (debit.signum() < 0 || credit.compareTo(MAX_BALANCE) > 0) {
+                return "FIFO payment " + id + " would put an intermediate balance outside its allowed range";
+            }
+            running.put(payment.from(), debit);
+            running.put(payment.to(), credit);
+        }
+        return null;
     }
 
     private UUID singleMember(List<UUID> ids) {

@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import lab.settlement.selection.SelectionPolicy;
 import lab.settlement.settlement.Ledger;
 
 import static lab.settlement.postgres.CommandSql.statement;
@@ -78,6 +79,16 @@ public final class PgAuthority {
 
     public Receipt settle(UUID domain, UUID command, UUID batch, long snapshotRevision, List<UUID> members)
             throws SQLException {
+        return settle(domain, command, batch, snapshotRevision, POLICY, members);
+    }
+
+    public Receipt settle(UUID domain, UUID command, UUID batch, long snapshotRevision, SelectionPolicy policy,
+                          List<UUID> members) throws SQLException {
+        return settle(domain, command, batch, snapshotRevision, policy.version(), members);
+    }
+
+    private Receipt settle(UUID domain, UUID command, UUID batch, long snapshotRevision, String policyVersion,
+                           List<UUID> members) throws SQLException {
         Objects.requireNonNull(batch);
         var requested = new ArrayList<>(Objects.requireNonNull(members));
         if (requested.isEmpty() || requested.size() > Ledger.MAX_BATCH_SIZE || requested.contains(null)
@@ -86,9 +97,9 @@ public final class PgAuthority {
         }
         List<UUID> sorted = requested.stream().sorted(Comparator.comparing(UUID::toString)).toList();
         String ids = sorted.stream().map(UUID::toString).collect(Collectors.joining(","));
-        String payload = "batch=" + batch + ";snapshot=" + snapshotRevision + ";policy=" + POLICY + ";members=" + ids;
+        String payload = "batch=" + batch + ";snapshot=" + snapshotRevision + ";policy=" + policyVersion + ";members=" + ids;
         return execute(domain, command, "SETTLE", payload, sorted,
-                (c, revision) -> BatchCommand.settle(c, domain, batch, snapshotRevision, sorted, revision));
+                (c, revision) -> BatchCommand.settle(c, domain, batch, snapshotRevision, policyVersion, sorted, revision));
     }
 
     public Optional<Receipt> receipt(UUID domain, UUID command) throws SQLException {

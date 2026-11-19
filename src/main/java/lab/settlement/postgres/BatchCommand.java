@@ -12,6 +12,9 @@ import java.util.Set;
 import java.util.UUID;
 import lab.settlement.domain.BatchPositions;
 import lab.settlement.domain.Payment;
+import lab.settlement.selection.QueueSnapshot;
+import lab.settlement.selection.QueuedPayment;
+import lab.settlement.selection.SelectionPolicy;
 
 import static lab.settlement.postgres.CommandSql.statement;
 import static lab.settlement.postgres.CommandSql.updateOne;
@@ -23,8 +26,8 @@ final class BatchCommand {
 
     private BatchCommand() {}
 
-    static Receipt settle(Connection c, UUID domain, UUID batch, long snapshot, List<UUID> members, long revision)
-            throws SQLException {
+    static Receipt settle(Connection c, UUID domain, UUID batch, long snapshot, String policyVersion,
+                          List<UUID> members, long revision) throws SQLException {
         if (snapshot < 0 || snapshot > revision) {
             return Receipt.at("REJECTED", "Snapshot revision must be between 0 and " + revision + ".", revision);
         }
@@ -36,23 +39,42 @@ final class BatchCommand {
             }
         }
 
-        var current = readMembers(c, domain, members);
         var eligible = new ArrayList<Payment>(members.size());
-        var accounts = new HashSet<UUID>();
-        for (UUID id : members) {
-            Member member = current.get(id);
-            if (member == null) {
-                return Receipt.at("REJECTED", "Unknown payment " + id + ".", revision);
+        Map<String, Long> balances;
+        if (SelectionPolicy.FIFO.version().equals(policyVersion)) {
+            // The request is canonicalized by UUID. Only the persisted queue sequence determines spending order.
+            var prefix = PgQueue.read(c, domain, revision, members.size());
+            var proposed = new HashSet<>(members);
+            if (prefix.payments().size() != members.size()
+                    || prefix.payments().stream().anyMatch(p -> !proposed.contains(p.id()))) {
+                return Receipt.at("REJECTED", "FIFO members are not the current queue prefix.", revision);
             }
-            if (!member.status().equals("QUEUED")) {
-                return Receipt.at("REJECTED", "Payment " + id + " is " + member.status() + ".", revision);
+            UUID blocked = firstUnpayable(prefix);
+            if (blocked != null) {
+                return Receipt.at("REJECTED", "FIFO payment " + blocked + " exceeds an intermediate balance.", revision);
             }
-            accounts.add(member.from());
-            accounts.add(member.to());
-            eligible.add(new Payment(id.toString(), member.from().toString(), member.to().toString(), member.amount()));
+            balances = new HashMap<>();
+            prefix.balances().forEach((id, amount) -> balances.put(id.toString(), amount));
+            for (QueuedPayment p : prefix.payments()) {
+                eligible.add(new Payment(p.id().toString(), p.from().toString(), p.to().toString(), p.amount()));
+            }
+        } else {
+            var current = readMembers(c, domain, members);
+            var accounts = new HashSet<UUID>();
+            for (UUID id : members) {
+                Member member = current.get(id);
+                if (member == null) {
+                    return Receipt.at("REJECTED", "Unknown payment " + id + ".", revision);
+                }
+                if (!member.status().equals("QUEUED")) {
+                    return Receipt.at("REJECTED", "Payment " + id + " is " + member.status() + ".", revision);
+                }
+                accounts.add(member.from());
+                accounts.add(member.to());
+                eligible.add(new Payment(id.toString(), member.from().toString(), member.to().toString(), member.amount()));
+            }
+            balances = readBalances(c, domain, accounts);
         }
-
-        Map<String, Long> balances = readBalances(c, domain, accounts);
         BatchPositions positions = BatchPositions.calculate(balances, eligible);
         for (var entry : positions.closingBalances().entrySet()) {
             BigInteger balance = entry.getValue();
@@ -70,7 +92,7 @@ final class BatchCommand {
         updateOne(c, """
                 INSERT INTO batch (domain_id, batch_id, snapshot_revision, commit_revision, policy_version)
                 VALUES (?, ?, ?, ?, ?)
-                """, domain, batch, snapshot, nextRevision, PgAuthority.POLICY);
+                """, domain, batch, snapshot, nextRevision, policyVersion);
         for (var entry : positions.closingBalances().entrySet()) {
             long balance = entry.getValue().longValueExact();
             if (balance != balances.get(entry.getKey())) {
@@ -91,6 +113,22 @@ final class BatchCommand {
     }
 
     private record Member(UUID from, UUID to, long amount, String status) {}
+
+    /** Revalidate the proposed instructions under the lock, independently of the coordinator's selection. */
+    private static UUID firstUnpayable(QueueSnapshot prefix) {
+        var running = new HashMap<>(prefix.balances());
+        for (var p : prefix.payments()) {
+            var amount = BigInteger.valueOf(p.amount());
+            var debit = BigInteger.valueOf(running.get(p.from())).subtract(amount);
+            var credit = BigInteger.valueOf(running.get(p.to())).add(amount);
+            if (debit.signum() < 0 || credit.compareTo(MAX_BALANCE) > 0) {
+                return p.id();
+            }
+            running.put(p.from(), debit.longValueExact());
+            running.put(p.to(), credit.longValueExact());
+        }
+        return null;
+    }
 
     private static Map<UUID, Member> readMembers(Connection c, UUID domain, List<UUID> members) throws SQLException {
         var result = new HashMap<UUID, Member>();
