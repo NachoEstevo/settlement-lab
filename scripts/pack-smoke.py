@@ -2,9 +2,11 @@
 
 import argparse
 from ipaddress import IPv4Network
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from uuid import uuid4
 from zipfile import ZipFile
@@ -59,7 +61,23 @@ def postgres_smoke(app, launcher, caller, env):
         run([*compose, "down", "--volumes", "--remove-orphans"], caller, env)
 
 
-def smoke(archive, postgres):
+def check_failover_kit(bundle, prefix):
+    expected = {"run.py", "verify.py", "compose.yaml", "init-primary.sh", "bootstrap-standby.sh"}
+    names = {info.filename.removeprefix(prefix) for info in bundle.infolist()
+             if info.filename.startswith(prefix) and not info.is_dir()}
+    if not expected.issubset(names):
+        raise RuntimeError(f"Missing failover assets: {sorted(expected - names)}")
+    for name in names:
+        if "/" in name or name.startswith("test_") or (
+                name != "compose.yaml" and not name.endswith((".py", ".sh"))):
+            raise RuntimeError(f"Unexpected failover distribution asset: {name}")
+        if name.endswith(".sh"):
+            info = bundle.getinfo(prefix + name)
+            if not (info.external_attr >> 16) & 0o111 or b"\r" in bundle.read(info):
+                raise RuntimeError(f"{name} must have executable permissions and LF line endings")
+
+
+def smoke(archive, postgres, failover_evidence):
     archive = archive.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="settlement pack ") as scratch:
         temp = Path(scratch)
@@ -72,6 +90,7 @@ def smoke(archive, postgres):
             members = bundle.namelist()
             if any(not name.startswith(archive.stem + "/") for name in members):
                 raise RuntimeError("Archive must contain one versioned application directory")
+            check_failover_kit(bundle, archive.stem + "/failover/")
         if os.name == "nt":
             run(["tar.exe", "-xf", str(archive), "-C", str(temp)], caller)
             launcher = app / "bin/settlement-lab.bat"
@@ -94,6 +113,9 @@ def smoke(archive, postgres):
         env = dict(os.environ, GRADLE_USER_HOME=str(temp / "unused-gradle-home"))
         for name in ("GRADLE_HOME", "CLASSPATH"):
             env.pop(name, None)
+        # Require all experiment imports to resolve inside the distributed kit.
+        env.pop("PYTHONPATH", None)
+        env["PYTHONNOUSERSITE"] = "1"
         output = run([str(launcher), "demo", "cycle"], caller, env)
         require_lines(output, ["Batch cycle [AB, BC, CA]: COMMITTED (gross settled=300)",
                                "Closing balances (SIM): A=20 B=20 C=20 | total=60",
@@ -108,6 +130,20 @@ def smoke(archive, postgres):
         print("Packaged selectors reproduced the blocked ring and the suboptimal choice.")
         if postgres:
             postgres_smoke(app, str(launcher), caller, env)
+        harness = [sys.executable, str(app / "failover/run.py")]
+        verifier = [sys.executable, str(app / "failover/verify.py")]
+        run([*harness, "--help"], caller, env)
+        run([*verifier, "--help"], caller, env)
+        # argparse exits on --help before the runner loads the experiment.
+        run([sys.executable, "-c", "from experiment import run_once"], app / "failover", env)
+        if failover_evidence:
+            evidence = failover_evidence.resolve()
+            print(run([*harness, "--mode", "both", "--repetitions", "1",
+                       "--out", str(evidence)], caller, env).strip())
+            print(run([*verifier, str(evidence)], caller, env).strip())
+            manifest = json.loads((evidence / "manifest.json").read_text(encoding="utf-8"))
+            if manifest["repetitions"] != 1 or sorted(manifest["trials"]) != ["async-01", "sync-01"]:
+                raise RuntimeError(f"Incomplete packaged failover trial set: {manifest}")
         if Path(env["GRADLE_USER_HOME"]).exists():
             raise RuntimeError("The distributed launcher unexpectedly used Gradle")
 
@@ -116,5 +152,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("--postgres", action="store_true", help="also smoke the bundled Compose lab")
+    parser.add_argument("--failover-evidence", type=Path, metavar="NEW_DIRECTORY",
+                        help="run both packaged promotion modes and retain their verified evidence here")
     args = parser.parse_args()
-    smoke(args.archive, args.postgres)
+    smoke(args.archive, args.postgres, args.failover_evidence)

@@ -1,6 +1,19 @@
 # Run the Settlement Lab distribution
 
-The `settlement-lab-0.2.0.zip` archive contains the Java application, runtime dependencies, database migrations, Linux and Windows launchers, and the Compose file for a local PostgreSQL 18 lab. Install Java 21 and extract the whole archive into a writable directory.
+The `settlement-lab-0.2.0.zip` archive contains the Java application, runtime dependencies, database migrations, Linux and Windows launchers, and two PostgreSQL 18 labs. Install Java 21 and extract the whole archive into a writable directory. The `failover/` experiment additionally requires Python and Docker with the Compose plugin.
+
+## Promote a standby and verify the receipts
+
+From the extracted `settlement-lab-0.2.0` directory, run both commands using Python 3.12. Choose a new evidence directory for each run.
+
+```sh
+python failover/run.py --mode both --repetitions 3 --out promotion-evidence
+python failover/verify.py promotion-evidence
+```
+
+On systems that install Python under `python3` or `py -3.12`, use that interpreter for both commands. The runner locates the Java launcher in the extracted `bin/` directory. It creates each replication pair in a disposable Compose project with dynamically assigned loopback ports. It cleans up the containers and volumes while retaining the evidence under the chosen output path.
+
+There are three asynchronous and three synchronous trials. Read `manifest.json` for the trial list and `summary.json` for their results. Compare the commands acknowledged by the client with their receipts on the promoted standby **before any retry**. In asynchronous replication a primary can acknowledge a write while the standby is behind. In synchronous replication, loss of the required standby can leave the client waiting for the commit reply. The second command verifies the saved evidence offline with the bundled Java application. These trials exercise two database processes on a single Docker host. [Experiment design and evidence guide](https://github.com/NachoEstevo/settlement-lab/blob/v0.2.0/docs/failover.md)
 
 ## Run the in-memory fixture
 

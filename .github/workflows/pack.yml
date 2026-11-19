@@ -44,9 +44,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -55,9 +58,16 @@ jobs:
         with:
           name: ${{ needs.archive.outputs.package }}
           path: ${{ runner.temp }}/package
-      - name: Run the extracted Linux launcher and database race
+      - name: Run the extracted Linux launcher, database race and failover experiment
         if: runner.os == 'Linux'
-        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/${{ needs.archive.outputs.package }}.zip" --postgres
+        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/${{ needs.archive.outputs.package }}.zip" --postgres --failover-evidence "${{ runner.temp }}/promotion-evidence"
       - name: Run the extracted Windows launcher
         if: runner.os == 'Windows'
         run: python scripts/pack-smoke.py "${{ runner.temp }}/package/${{ needs.archive.outputs.package }}.zip"
+      - name: Save the evidence produced by the packaged experiment
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.archive.outputs.package }}-failover-evidence
+          path: ${{ runner.temp }}/promotion-evidence
+          if-no-files-found: ignore

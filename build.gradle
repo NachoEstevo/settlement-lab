@@ -12,6 +12,16 @@ distributions.main.contents {
     from(projectDir) {
         include 'LICENSE', 'LICENSE.*', 'THIRD_PARTY_NOTICES*', 'notices/**'
     }
+    from('failover') {
+        into 'failover'
+        include '*.py', 'compose.yaml'
+        exclude 'test_*.py'
+    }
+    from('failover') {
+        into 'failover'
+        include '*.sh'
+        filePermissions { unix('rwxr-xr-x') }
+    }
 }
 
 repositories {
