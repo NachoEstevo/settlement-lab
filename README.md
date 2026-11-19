@@ -6,7 +6,7 @@ docker compose up -d --wait
 
 # Settlement Lab
 
-The v0.1.0 ZIP includes launchers for Windows and Linux. [Private release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.1.0) · [Run the distribution](docs/distribution.md)
+The v0.2.0 ZIP includes Windows and Linux launchers and the two-node PostgreSQL failover experiment. [Private releases](https://github.com/NachoEstevo/settlement-lab/releases) · [Run the distribution](docs/distribution.md)
 
 A, B and C have 20 units each and owe 100 around a ring. None can pay first. Together they can settle 300 with 60 units of cash, unless C cancels its payment first. The two commands race cancellation against settlement on independent PostgreSQL 18 connections. Each creates a fresh domain with the same opening balances and obligations.
 
@@ -35,6 +35,16 @@ The verifier replays the history from the opening balances, checks the identitie
 The local database listens on `127.0.0.1:55432`. Its database name, user and password are `settlement_lab`. For a different host port, set `SETTLEMENT_PORT` before starting Compose and set `SETTLEMENT_JDBC_URL` to the matching URL, such as `jdbc:postgresql://127.0.0.1:55433/settlement_lab`. The client also accepts `SETTLEMENT_DB_USER` and `SETTLEMENT_DB_PASSWORD`. Use `docker compose down` to stop the lab while retaining its named volume. Starting it again reconnects to the stored history. [Compose configuration](compose.yaml)
 
 **Windows time zones.** pgJDBC sends the JVM's time-zone ID when it connects. A Windows JVM can report `America/Buenos_Aires`, an alias missing from the Debian Trixie image's time-zone data. PostgreSQL then rejects the connection with SQLSTATE `22023`. Gradle's `run` task, the distributed launchers and the tests use `-Duser.timezone=UTC` in their JVMs. Windows keeps the host's configured time zone. [JVM configuration](build.gradle) · [pgJDBC startup parameters](https://github.com/pgjdbc/pgjdbc/blob/REL42.7.14/pgjdbc/src/main/java/org/postgresql/core/v3/ConnectionFactoryImpl.java#L422-L429)
+
+## Promote a physical PostgreSQL standby
+
+```sh
+./gradlew installDist
+python failover/run.py --mode both --repetitions 3 --out build/failover-evidence
+python failover/verify.py build/failover-evidence
+```
+
+Each run creates a disposable two-node Compose project. An external client records which financial commands received an ACK. The experiment cuts WAL transmission, fences the old primary and compares those ACKs with the promoted standby's complete history before retrying any measured command. It times the first verified SQL write and the first new financial ACK on the promoted server. Choose a new output directory for each run. [Experiment, results and evidence files](docs/failover.md)
 
 ## In-memory fixtures
 
