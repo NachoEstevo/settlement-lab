@@ -12,6 +12,8 @@ jobs:
   archive:
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    outputs:
+      package: ${{ steps.dist.outputs.package }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -19,11 +21,19 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-      - run: ./gradlew --no-daemon distZip
+      - name: Build the versioned archive
+        id: dist
+        run: |
+          ./gradlew --no-daemon distZip
+          shopt -s nullglob
+          archives=(build/distributions/settlement-lab-*.zip)
+          test "${#archives[@]}" -eq 1
+          echo "package=$(basename "${archives[0]}" .zip)" >> "$GITHUB_OUTPUT"
+          echo "zip=${archives[0]}" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: settlement-lab-0.1.0
-          path: build/distributions/settlement-lab-0.1.0.zip
+          name: ${{ steps.dist.outputs.package }}
+          path: ${{ steps.dist.outputs.zip }}
           if-no-files-found: error
           compression-level: 0
 
@@ -43,11 +53,11 @@ jobs:
           java-version: '21'
       - uses: actions/download-artifact@v4
         with:
-          name: settlement-lab-0.1.0
+          name: ${{ needs.archive.outputs.package }}
           path: ${{ runner.temp }}/package
       - name: Run the extracted Linux launcher and database race
         if: runner.os == 'Linux'
-        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/settlement-lab-0.1.0.zip" --postgres
+        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/${{ needs.archive.outputs.package }}.zip" --postgres
       - name: Run the extracted Windows launcher
         if: runner.os == 'Windows'
-        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/settlement-lab-0.1.0.zip"
+        run: python scripts/pack-smoke.py "${{ runner.temp }}/package/${{ needs.archive.outputs.package }}.zip"

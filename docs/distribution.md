@@ -1,10 +1,10 @@
 # Run the Settlement Lab distribution
 
-The `settlement-lab-0.1.0.zip` archive contains the Java application, runtime dependencies, database migrations, Linux and Windows launchers, and the Compose file for a local PostgreSQL 18 lab. Install Java 21 and extract the whole archive into a writable directory.
+The `settlement-lab-0.2.0.zip` archive contains the Java application, runtime dependencies, database migrations, Linux and Windows launchers, and the Compose file for a local PostgreSQL 18 lab. Install Java 21 and extract the whole archive into a writable directory.
 
 ## Run the in-memory fixture
 
-Open a terminal in the extracted `settlement-lab-0.1.0` directory. The fixture runs offline with a Java 21 runtime. If several Java installations are present, set `JAVA_HOME` to the Java 21 installation directory.
+Open a terminal in the extracted `settlement-lab-0.2.0` directory. The fixture runs offline with a Java 21 runtime. If several Java installations are present, set `JAVA_HOME` to the Java 21 installation directory.
 
 On Linux, use the shell launcher.
 
@@ -31,7 +31,7 @@ On Linux, run the following commands from the extracted directory. In Windows Po
 
 The selection demo shows two small queues. In the three-payment ring, strict FIFO settles **0** and the multilateral heuristic settles **300**. In the second queue, A has 5 and owes 4 and 5. The heuristic keeps the earlier payment and settles **4**. Choosing the second would settle **5**, so the heuristic leaves a 20% gap to the optimum for that window.
 
-The economic benchmark uses seed `20261119` and a window of `32` queued payments. The JSON report records eight logical ticks, every settlement opportunity and the payments left pending at the cutoff. Across all eight ticks, FIFO settles 0 gross in the blocked-rings workload and the heuristic settles 1,995. [Economic benchmark and workloads](https://github.com/NachoEstevo/settlement-lab/blob/v0.1.0/docs/economic-benchmark.md)
+The economic benchmark uses seed `20261119` and a window of `32` queued payments. The JSON report records eight logical ticks, every settlement opportunity and the payments left pending at the cutoff. Across all eight ticks, FIFO settles 0 gross in the blocked-rings workload and the heuristic settles 1,995. [Economic benchmark and workloads](https://github.com/NachoEstevo/settlement-lab/blob/v0.2.0/docs/economic-benchmark.md)
 
 ## Run the durable race
 
@@ -51,12 +51,12 @@ With the Compose database running, execute the following command or its Windows 
 ./bin/settlement-lab pg capacity 4 128 4 42
 ```
 
-The arguments select four workers, 128 payments, a queue window of four and seed 42. The verifier should report 32 batches, gross 6,317 and conserved cash of 102,400. Latency and throughput depend on disk flushes, worker scheduling, database lock contention, CPU and competing load. Compare local timings with repeated trials under the same setup. Run `docker compose down` when finished to stop the lab and retain its data volume. [Capacity benchmark and measurements](https://github.com/NachoEstevo/settlement-lab/blob/v0.1.0/docs/capacity-benchmark.md)
+The arguments select four workers, 128 payments, a queue window of four and seed 42. The verifier should report 32 batches, gross 6,317 and conserved cash of 102,400. Latency and throughput depend on disk flushes, worker scheduling, database lock contention, CPU and competing load. Compare local timings with repeated trials under the same setup. Run `docker compose down` when finished to stop the lab and retain its data volume. [Capacity benchmark and measurements](https://github.com/NachoEstevo/settlement-lab/blob/v0.2.0/docs/capacity-benchmark.md)
 
 ## Obtaining the ZIP
 
-Download `settlement-lab-0.1.0.zip` from the release assets while signed in to a GitHub account with repository access. [Settlement Lab v0.1.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.1.0)
+Download `settlement-lab-0.2.0.zip` from the release assets while signed in to a GitHub account with repository access. [Settlement Lab v0.2.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.2.0)
 
-For a build of another commit, download the `settlement-lab-0.1.0` artifact of its successful **Package distribution** workflow. The GitHub artifact contains the application ZIP. Extract the GitHub download first and then the application ZIP.
+For a build of another commit, download the `settlement-lab-0.2.0` artifact of its successful **Package distribution** workflow. The GitHub artifact contains the application ZIP. Extract the GitHub download first and then the application ZIP.
 
 To build the distribution from a checkout with a JDK 21 installation, run `./gradlew distZip` on Linux or `.\gradlew.bat distZip` in PowerShell. The application ZIP is written to `build/distributions/`.
