@@ -69,6 +69,15 @@ class MainTest {
 
     private record Run(int exitCode, String out, String err) {}
 
+    @Test
+    void selectionDemoReportsTheLiquiditySavingAndTheSuboptimalChoice() {
+        var demo = invoke("demo", "selection");
+        assertEquals(0, demo.exitCode());
+        assertTrue(demo.out().contains("fifo-v1 queue_positions=[] gross=0 gap=300 (100%)"));
+        assertTrue(demo.out().contains("heuristic-v1 queue_positions=[1, 2, 3] gross=300 gap=0 (0%)"));
+        assertTrue(demo.out().contains("heuristic-v1 queue_positions=[1] gross=4 gap=1 (20%)"));
+    }
+
     private static Run invoke(String... args) {
         var out = new ByteArrayOutputStream();
         var err = new ByteArrayOutputStream();

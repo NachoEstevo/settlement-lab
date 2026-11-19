@@ -52,6 +52,16 @@ Each `demo` invocation opens a fresh in-memory ledger. Its `--race` option choos
 | Equal cycle, cancellation first | Cancelling `CA` removes A's incoming 100. The original proposal contains a cancelled member. Proposing just `AB` and `BC` would still leave A at −80. | Both proposals are rejected. `AB` and `BC` stay queued, `CA` stays cancelled, and each account keeps its 20. |
 | Unequal cycle | Start at zero. Payments of 100, 100 and 90 would close A at −10, B at 0 and C at +10. | The batch is rejected. All three payments stay queued and each balance stays at zero. |
 
+## Select a batch
+
+```sh
+./gradlew -q run --args="demo selection"
+```
+
+In the 100/100/100 ring, strict FIFO stops at the first payment and the multilateral heuristic settles 300. The second fixture gives A 5 and queues transfers of 4 and 5. The heuristic keeps the older transfer of 4, leaving a gap of 1 from the hand-calculated optimum of 5. The test oracle enumerates all subsets of windows up to 12 instructions. [Selection and authority decisions](docs/decisions.md)
+
+For a persisted domain, `pg cycle DOMAIN fifo 32` or `pg cycle DOMAIN heuristic 32` attempts one batch. The CLI prints how many payments it inspected, whether the queue extends past the window, and the snapshot revision. A nonempty proposal includes a `replay=` line before the write. Use that exact `pg settle` command after an interrupted response. Each new `pg cycle` reads a fresh snapshot. Use `pg receipt DOMAIN COMMAND` to retrieve an existing decision.
+
 ## Settlement rules
 
 The demo uses one simulated currency, `SIM`, with scale 0. One integer unit is the smallest transferable amount. Accounts open with a balance between 0 and `Long.MAX_VALUE`. Obligations may exceed the sender's available balance at submission.

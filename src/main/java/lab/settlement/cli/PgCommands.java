@@ -12,6 +12,9 @@ import lab.settlement.demo.PgRace;
 import lab.settlement.postgres.Database;
 import lab.settlement.postgres.PaymentLookup;
 import lab.settlement.postgres.PgAuthority;
+import lab.settlement.postgres.PgCoordinator;
+import lab.settlement.selection.QueueSnapshot;
+import lab.settlement.selection.SelectionPolicy;
 import lab.settlement.verification.HistoryExport;
 import lab.settlement.verification.HistoryVerifier;
 import org.flywaydb.core.api.FlywayException;
@@ -90,12 +93,8 @@ final class PgCommands {
                 require(args.size() == 5, "pg cancel DOMAIN COMMAND PAYMENT");
                 PgOutput.receipt(out, authority.cancel(id(args.get(2)), id(args.get(3)), id(args.get(4))));
             }
-            case "settle" -> {
-                require(args.size() >= 7, "pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION PAYMENT...");
-                List<UUID> members = args.subList(6, args.size()).stream().map(PgCommands::id).toList();
-                PgOutput.receipt(out, authority.settle(id(args.get(2)), id(args.get(3)), id(args.get(4)),
-                        number(args.get(5)), members));
-            }
+            case "settle" -> settle(args, out, authority);
+            case "cycle" -> cycle(args, out, db);
             case "receipt" -> {
                 require(args.size() == 4, "pg receipt DOMAIN COMMAND");
                 authority.receipt(id(args.get(2)), id(args.get(3)))
@@ -119,6 +118,55 @@ final class PgCommands {
             }
             default -> throw new IllegalArgumentException("Unknown PostgreSQL command. Run with --help.");
         }
+    }
+
+    private static void cycle(List<String> args, PrintStream out, Database db) throws SQLException {
+        require(args.size() == 5 || args.size() == 7, "pg cycle DOMAIN fifo|heuristic WINDOW [COMMAND BATCH]");
+        UUID domain = id(args.get(2));
+        SelectionPolicy policy = policy(args.get(3));
+        long window = number(args.get(4));
+        if (window < 1 || window > QueueSnapshot.MAX_WINDOW) {
+            throw new IllegalArgumentException("Window must be between 1 and " + QueueSnapshot.MAX_WINDOW + ".");
+        }
+        UUID command = args.size() == 7 ? id(args.get(5)) : UUID.randomUUID();
+        UUID batch = args.size() == 7 ? id(args.get(6)) : UUID.randomUUID();
+        var coordinator = new PgCoordinator(db);
+        var plan = coordinator.plan(domain, policy, (int) window);
+        out.printf("domain=%s%npolicy=%s%nwindow=%s%nsnapshot_revision=%s%ninspected=%s%nhas_more=%s%n",
+                domain, policy.version(), window, plan.revision(), plan.inspected(), plan.hasMore());
+        out.println("selection_ns=" + plan.selectionNanos());
+        if (plan.selection().members().isEmpty()) {
+            out.println("NO_CANDIDATE");
+            return;
+        }
+        var ids = plan.selection().ids().stream().map(UUID::toString).toList();
+        out.printf("command=%s%nbatch=%s%nmembers=%s%n", command, batch, String.join(" ", ids));
+        out.printf("replay=pg settle %s %s %s %s --policy %s %s%n",
+                domain, command, batch, plan.revision(), args.get(3), String.join(" ", ids));
+        out.flush();
+        PgOutput.receipt(out, coordinator.commit(plan, command, batch).orElseThrow());
+    }
+
+    private static void settle(List<String> args, PrintStream out, PgAuthority authority) throws SQLException {
+        String usage = "pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION [--policy fifo|heuristic] PAYMENT...";
+        require(args.size() >= 7, usage);
+        boolean policySupplied = args.get(6).equals("--policy");
+        require(!policySupplied || args.size() >= 9, usage);
+        UUID domain = id(args.get(2)), command = id(args.get(3)), batch = id(args.get(4));
+        long revision = number(args.get(5));
+        List<UUID> members = args.subList(policySupplied ? 8 : 6, args.size()).stream().map(PgCommands::id).toList();
+        var receipt = policySupplied
+                ? authority.settle(domain, command, batch, revision, policy(args.get(7)), members)
+                : authority.settle(domain, command, batch, revision, members);
+        PgOutput.receipt(out, receipt);
+    }
+
+    private static SelectionPolicy policy(String input) {
+        return switch (input) {
+            case "fifo" -> SelectionPolicy.FIFO;
+            case "heuristic" -> SelectionPolicy.HEURISTIC;
+            default -> throw new IllegalArgumentException("Policy must be fifo or heuristic.");
+        };
     }
 
     private static UUID id(String value) {

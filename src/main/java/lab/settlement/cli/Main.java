@@ -14,7 +14,8 @@ public final class Main {
             pg init DOMAIN ACCOUNT=OPENING...
             pg submit DOMAIN COMMAND PAYMENT FROM TO AMOUNT
             pg cancel DOMAIN COMMAND PAYMENT
-            pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION PAYMENT...
+            pg cycle DOMAIN fifo|heuristic WINDOW [COMMAND BATCH]
+            pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION [--policy fifo|heuristic] PAYMENT...
             pg receipt DOMAIN COMMAND
             pg payment DOMAIN PAYMENT
             pg snapshot DOMAIN
@@ -30,6 +31,7 @@ public final class Main {
             demo cycle --race settle-first   Run the same order explicitly.
             demo cycle --race cancel-first   Cancel C's payment before proposing the group.
             demo unequal                     Propose a 100/100/90 cycle with zero opening funds.
+            demo selection                   Compare policies against two hand-calculated optima.
             --help, -h                       Show this help.
 
             The in-memory examples use sequential order. The pg race waits until
@@ -50,6 +52,10 @@ public final class Main {
         }
         if (command.getFirst().equals("pg") || command.getFirst().equals("verify")) {
             return PgCommands.run(command, out, err);
+        }
+        if (command.equals(List.of("demo", "selection"))) {
+            SelectionDemo.run(out);
+            return 0;
         }
 
         Demo demo;
