@@ -19,7 +19,7 @@ Look for `wait_event_type=Lock` and the three backend PIDs. The first writer hol
 
 ## Inspect and verify a run
 
-Copy `domain` and `settle_command` from one race into the commands below in place of `DOMAIN` and `COMMAND`. A snapshot shows the live payment states. An export captures that domain's accounts, payments, batches, events and receipts in a versioned JSON file for offline verification.
+Before either writer starts, the CLI prints the domain, command IDs, batch, snapshot revision and payment IDs. Keep these lines to look up or repeat the same command after an interruption. Copy `domain` and `settle_command` into the commands below in place of `DOMAIN` and `COMMAND`. A snapshot shows the live payment states. An export captures that domain's accounts, payments, batches, events and receipts in a versioned JSON file for offline verification.
 
 ```sh
 ./gradlew -q run --args="pg snapshot DOMAIN"
