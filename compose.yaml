@@ -1,0 +1,20 @@
+name: settlement-lab
+services:
+  postgres:
+    image: postgres:18.7-trixie@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
+    environment:
+      POSTGRES_DB: settlement_lab
+      POSTGRES_USER: settlement_lab
+      POSTGRES_PASSWORD: settlement_lab
+    ports:
+      - "127.0.0.1:${SETTLEMENT_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "settlement_lab", "-d", "settlement_lab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

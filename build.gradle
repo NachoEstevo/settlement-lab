@@ -14,9 +14,15 @@ java {
 
 application {
     mainClass = 'lab.settlement.cli.Main'
+    // pgJDBC sends the JVM zone at startup. UTC also exists in minimal server tzdata.
+    applicationDefaultJvmArgs = ['-Duser.timezone=UTC']
 }
 
 dependencies {
+    implementation 'org.postgresql:postgresql:42.7.14'
+    implementation 'org.flywaydb:flyway-core:13.13.0'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql:13.13.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.23.0'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
@@ -27,4 +33,30 @@ dependencyLocking {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.withType(Test).configureEach {
+    systemProperty 'user.timezone', 'UTC'
+}
+
+sourceSets {
+    integrationTest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations {
+    integrationTestImplementation.extendsFrom testImplementation
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Run the integration suite against a live PostgreSQL 18 instance.'
+    group = 'verification'
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    useJUnitPlatform()
+    // The selected database and its current state are external to Gradle.
+    outputs.upToDateWhen { false }
 }
