@@ -68,7 +68,7 @@ The arguments select four workers, 128 payments, a queue window of four and seed
 
 ## Obtaining the ZIP
 
-Download `settlement-lab-0.2.0.zip` from the release assets while signed in to a GitHub account with repository access. [Settlement Lab v0.2.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.2.0)
+Download `settlement-lab-0.2.0.zip` from the release assets. [Settlement Lab v0.2.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.2.0)
 
 For a build of another commit, download the `settlement-lab-0.2.0` artifact of its successful **Package distribution** workflow. The GitHub artifact contains the application ZIP. Extract the GitHub download first and then the application ZIP.
 

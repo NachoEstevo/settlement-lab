@@ -19,7 +19,7 @@ Times are medians with the observed minimum and maximum in brackets. The sync cl
 
 The trial data records each domain, probe count, individual timing and uncertainty interval in milliseconds. For example, the second JVM resolved the first interrupted cancellation by lookup in 0.173–0.341 s across all six trials. [Per-trial measurements](failover-samples.csv)
 
-The Windows campaign's raw evidence archive is `failover-v02-evidence.zip`, SHA-256 `c5da7517be44243424446a40ad8854c9242e39b4d1efb2e18535166153ee52f9`. Locate the archive with the v0.2.0 release assets, extract it alongside the application, and pass its inner `failover-evidence/` directory to the verifier. [Private releases](https://github.com/NachoEstevo/settlement-lab/releases)
+The Windows campaign's raw evidence archive is `failover-v02-evidence.zip`, SHA-256 `c5da7517be44243424446a40ad8854c9242e39b4d1efb2e18535166153ee52f9`. Download the archive from the v0.2.0 release assets, extract it alongside the application, and pass its inner `failover-evidence/` directory to the verifier. [Settlement Lab v0.2.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.2.0)
 
 ## Reproduce the experiment
 
@@ -73,7 +73,7 @@ With transmission cut, the client tries to settle B's 7. The async primary can a
 
 The top-level `environment.json` records the host, Java, Python, Docker and Compose, plus SHA-256 digests of the application JAR and harness files. `manifest.json` identifies the expected trial directories, while `summary.json` collects results by trial. Keep the JSONL and history exports alongside the summary so another reader can recompute each result.
 
-CI runs three repetitions per policy on Linux. The **PostgreSQL failover** workflow uploads the raw bundle as `failover-evidence-<commit>-<run attempt>`. Download the artifact for the commit you are comparing, extract it, and pass the directory containing `manifest.json` to `python failover/verify.py`. [Private failover workflow runs](https://github.com/NachoEstevo/settlement-lab/actions/workflows/failover.yml)
+CI runs three repetitions per policy on Linux. The **PostgreSQL failover** workflow uploads the raw bundle as `failover-evidence-<commit>-<run attempt>`. Download the artifact for the commit you are comparing, extract it, and pass the directory containing `manifest.json` to `python failover/verify.py`. [Failover workflow runs](https://github.com/NachoEstevo/settlement-lab/actions/workflows/failover.yml)
 
 For example, inspect a trial's pre-retry history with the packaged `verify` command.
 

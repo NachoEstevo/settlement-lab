@@ -1,111 +1,90 @@
-```sh
-docker compose up -d --wait
-./gradlew -q run --args="pg race cancel-first"
-./gradlew -q run --args="pg race settle-first --drop-reply"
-```
-
 # Settlement Lab
 
-The v0.2.0 ZIP includes Windows and Linux launchers and the two-node PostgreSQL failover experiment. [Private releases](https://github.com/NachoEstevo/settlement-lab/releases) · [Run the distribution](docs/distribution.md)
+Three banks each have 20 units of cash. A owes B 100, B owes C 100 and C owes A 100. No bank can make the first payment on its own. Settle all three together and each bank still has 20. What happens if C cancels while the batch is committing, or if the database acknowledges the settlement and then loses its primary?
 
-A, B and C have 20 units each and owe 100 around a ring. None can pay first. Together they can settle 300 with 60 units of cash, unless C cancels its payment first. The two commands race cancellation against settlement on independent PostgreSQL 18 connections. Each creates a fresh domain with the same opening balances and obligations.
-
-Run the quickstart from the checkout with JDK 21 and Docker Compose in Windows PowerShell or a Linux shell. Set `JAVA_HOME` to the JDK directory when another Java version is the default. In Windows Command Prompt use `gradlew.bat` for `./gradlew`. Compose downloads the pinned database image and the Gradle Wrapper downloads the build tools and dependencies on first use.
-
-| First writer | What PostgreSQL commits |
-| --- | --- |
-| Cancel | C's payment becomes `CANCELLED`. The waiting settlement sees the cancellation and rejects the entire batch. Two payments remain queued, gross settled is 0 and all balances stay at 20. |
-| Settle | The three payments become members of one batch. Gross settled is 300 and all balances stay at 20. The waiting cancellation returns `ALREADY_SETTLED` with the batch ID. |
-
-Look for `wait_event_type=Lock` and the three backend PIDs. The first writer holds the domain row until the observer sees its PID in PostgreSQL's list of blockers for the second writer. With `--drop-reply`, the demo closes the winning session after its commit and withholds the reply. It resends the same command on a fresh connection and prints `reply_recovered=true` once the result matches the stored receipt.
-
-## Inspect and verify a run
-
-Before either writer starts, the CLI prints the domain, command IDs, batch, snapshot revision and payment IDs. Keep these lines to look up or repeat the same command after an interruption. Copy `domain` and `settle_command` into the commands below in place of `DOMAIN` and `COMMAND`. A snapshot shows the live payment states. An export captures that domain's accounts, payments, batches, events and receipts in a versioned JSON file for offline verification.
-
-```sh
-./gradlew -q run --args="pg snapshot DOMAIN"
-./gradlew -q run --args="pg receipt DOMAIN COMMAND"
-./gradlew -q run --args="pg export DOMAIN build/history.json"
-./gradlew -q run --args="verify build/history.json"
-```
-
-The verifier replays the history from the opening balances, checks the identities of the settled members and reports the conserved balance and gross settled. A contradictory history exits with an error. For your own fixture, first run `./gradlew -q run --args="pg migrate"`. The CLI help lists commands to open a domain, submit or cancel a payment, settle a proposed group and inspect a payment by ID. Run `./gradlew -q run --args="--help"`.
-
-The local database listens on `127.0.0.1:55432`. Its database name, user and password are `settlement_lab`. For a different host port, set `SETTLEMENT_PORT` before starting Compose and set `SETTLEMENT_JDBC_URL` to the matching URL, such as `jdbc:postgresql://127.0.0.1:55433/settlement_lab`. The client also accepts `SETTLEMENT_DB_USER` and `SETTLEMENT_DB_PASSWORD`. Use `docker compose down` to stop the lab while retaining its named volume. Starting it again reconnects to the stored history. [Compose configuration](compose.yaml)
-
-**Windows time zones.** pgJDBC sends the JVM's time-zone ID when it connects. A Windows JVM can report `America/Buenos_Aires`, an alias missing from the Debian Trixie image's time-zone data. PostgreSQL then rejects the connection with SQLSTATE `22023`. Gradle's `run` task, the distributed launchers and the tests use `-Duser.timezone=UTC` in their JVMs. Windows keeps the host's configured time zone. [JVM configuration](build.gradle) · [pgJDBC startup parameters](https://github.com/pgjdbc/pgjdbc/blob/REL42.7.14/pgjdbc/src/main/java/org/postgresql/core/v3/ConnectionFactoryImpl.java#L422-L429)
-
-## Promote a physical PostgreSQL standby
-
-```sh
-./gradlew installDist
-python failover/run.py --mode both --repetitions 3 --out build/failover-evidence
-python failover/verify.py build/failover-evidence
-```
-
-Each run creates a disposable two-node Compose project. An external client records which financial commands received an ACK. The experiment cuts WAL transmission, fences the old primary and compares those ACKs with the promoted standby's complete history before retrying any measured command. It times the first verified SQL write and the first new financial ACK on the promoted server. Choose a new output directory for each run. [Experiment, results and evidence files](docs/failover.md)
-
-## In-memory fixtures
-
-With just the JDK, run the original F0 examples in Windows PowerShell or a Linux shell.
-
-```sh
-./gradlew -q run --args="demo cycle"
-./gradlew -q run --args="demo cycle --race cancel-first"
-./gradlew -q run --args="demo unequal"
-```
-
-Each `demo` invocation opens a fresh in-memory ledger. Its `--race` option chooses the order of two sequential operations. The default for the equal cycle is `settle-first`. The payment IDs `AB`, `BC` and `CA` identify transfers in the direction indicated by their letters.
-
-| Fixture | Manual calculation | Closing state |
-| --- | --- | --- |
-| Equal cycle, settlement first | A alone would close at 20 − 100 = −80. In the group, each account closes at 20 + 100 − 100 = 20. | All three payments belong to batch `cycle`. Cancelling `CA` returns `ALREADY_SETTLED` and identifies that batch. |
-| Equal cycle, cancellation first | Cancelling `CA` removes A's incoming 100. The original proposal contains a cancelled member. Proposing just `AB` and `BC` would still leave A at −80. | Both proposals are rejected. `AB` and `BC` stay queued, `CA` stays cancelled, and each account keeps its 20. |
-| Unequal cycle | Start at zero. Payments of 100, 100 and 90 would close A at −10, B at 0 and C at +10. | The batch is rejected. All three payments stay queued and each balance stays at zero. |
+Settlement Lab is a Java 21 and PostgreSQL 18 experiment that lets you run all three cases. The selector proposes a group of payments. The database locks the settlement domain, rechecks the proposal and commits balances, batch membership and a command receipt in one transaction. An offline verifier replays the resulting history. [Architecture and transaction diagrams](docs/architecture.md) · [Selection and locking decisions](docs/decisions.md)
 
 ## Select a batch
 
-```sh
-./gradlew -q run --args="demo selection"
+**From the release ZIP**, install a Java 21 runtime, download `settlement-lab-0.2.0.zip` and extract it. In the extracted directory containing `bin/`, run `.\bin\settlement-lab.bat demo selection` in PowerShell or `./bin/settlement-lab demo selection` on Linux. The queue example runs offline with the dependencies in the ZIP. [Download the v0.2.0 release](https://github.com/NachoEstevo/settlement-lab/releases/tag/v0.2.0)
+
+**From a clone**, install a JDK 21 and run the whole block for your shell from the repository root. The Gradle Wrapper downloads its build tools and dependencies on first use. If you have several JDKs installed, set `JAVA_HOME` to the JDK 21 directory.
+
+**Windows PowerShell**
+
+```powershell
+.\gradlew.bat -q installDist
+Set-Location .\build\install\settlement-lab
+.\bin\settlement-lab.bat demo selection
 ```
 
-In the 100/100/100 ring, strict FIFO stops at the first payment and the multilateral heuristic settles 300. The second fixture gives A 5 and queues transfers of 4 and 5. The heuristic keeps the older transfer of 4, leaving a gap of 1 from the hand-calculated optimum of 5. The test oracle enumerates all subsets of windows up to 12 instructions. [Selection and authority decisions](docs/decisions.md)
-
-For a persisted domain, `pg cycle DOMAIN fifo 32` or `pg cycle DOMAIN heuristic 32` attempts one batch. The CLI prints how many payments it inspected, whether the queue extends past the window, and the snapshot revision. A nonempty proposal includes a `replay=` line before the write. Use that exact `pg settle` command after an interrupted response. Each new `pg cycle` reads a fresh snapshot. Use `pg receipt DOMAIN COMMAND` to retrieve an existing decision.
-
-## Reproduce the benchmarks
-
-```sh
-./gradlew -q run --args="benchmark economic 20261119 32"
-./gradlew -q run --args="pg capacity 4 96 8 42"
-```
-
-The first command compares both policies on the same eight-tick schedules and writes a JSON report. It includes the inputs, batch choices, settled volume, remaining payments and waiting times by sender. The second command creates a fresh PostgreSQL domain and measures independent workers contending for it. Its timings cover selection, the lock statement, validation and writes, commit, and the full nonempty cycle. [Economic results](docs/economic-benchmark.md) · [Capacity measurements and environment](docs/capacity-benchmark.md)
-
-## Settlement rules
-
-The demo uses one simulated currency, `SIM`, with scale 0. One integer unit is the smallest transferable amount. Accounts open with a balance between 0 and `Long.MAX_VALUE`. Obligations may exceed the sender's available balance at submission.
-
-```mermaid
-stateDiagram-v2
-    [*] --> QUEUED : submit
-    QUEUED --> SETTLED : batch commits
-    QUEUED --> CANCELLED : cancel
-```
-
-A batch names 1 to 128 distinct queued payments. For each participant the ledger computes `current balance + incoming − outgoing` across the complete proposal. It uses `BigInteger` for the calculation and gross volume. Each batch must keep every closing balance in range and conserve the total cash of the accounts it touches. The system total therefore stays equal to the sum of its openings. A successful batch records its ID on every member. Both terminal states are permanent for the life of that ledger.
-
-The command reference includes optional arguments, exit codes, default settings and how to retry an uncertain commit. [CLI reference](docs/cli.md)
-
-## Tests
+**Linux**
 
 ```sh
-./gradlew test
-docker compose up -d --wait
-./gradlew integrationTest
+./gradlew -q installDist
+cd build/install/settlement-lab
+./bin/settlement-lab demo selection
 ```
 
-On Linux, `bash scripts/test-postgres.sh` runs the integration suite and terminal recovery checks on an isolated Compose project. It runs both race orders, restarts PostgreSQL on its original volume, and checks the exported history and receipt after replay from a new JVM. The script removes its temporary project when finished. If Docker reports that its predefined address pools are exhausted, set `SETTLEMENT_TEST_SUBNET` to an unused private CIDR before running the script. [Recovery check](scripts/test-postgres.sh) · [Architecture](docs/architecture.md)
+| Queue | Strict FIFO | Multilateral heuristic | What the result tells you |
+| --- | ---: | ---: | --- |
+| Three payments of 100 in a ring | 0 | 300 | FIFO stops at the unfunded head. Settling the three payments together clears 300 gross with 60 cash. |
+| A has 5 and queues payments of 4 and 5 | 4 | 4 | Both policies keep the older payment. Selecting the second alone would settle 5, so the heuristic leaves 20% of the possible volume unsettled. |
 
-The project uses the Gradle 9.9.2 Wrapper. Its distribution checksum is pinned in [gradle-wrapper.properties](gradle/wrapper/gradle-wrapper.properties). The Wrapper JAR has SHA-256 `621008afc4f5d59357fcf06ffa644dd5aade5e091bdc363742710445f73cdaf8`. Gradle publishes both reference values. [Distribution checksum](https://services.gradle.org/distributions/gradle-9.9.2-bin.zip.sha256) · [Wrapper JAR checksum](https://services.gradle.org/distributions/gradle-9.9.2-wrapper.jar.sha256)
+## Race settlement against cancellation in PostgreSQL
+
+For the database experiments, start Docker with the Compose plugin and Linux containers. From the same installed directory, run `docker compose up -d --wait`. Compose downloads PostgreSQL on first use. The single-primary lab uses `127.0.0.1:55432` by default.
+
+**Windows PowerShell**
+
+```powershell
+.\bin\settlement-lab.bat pg race cancel-first
+.\bin\settlement-lab.bat pg race settle-first --drop-reply
+```
+
+**Linux**
+
+```sh
+./bin/settlement-lab pg race cancel-first
+./bin/settlement-lab pg race settle-first --drop-reply
+```
+
+Each command seeds a fresh ring. Two database sessions race, and a third checks PostgreSQL's lock table before the first writer proceeds. Look for `wait_event_type=Lock` in both runs.
+
+| First writer | Outcome |
+| --- | --- |
+| Cancellation | C's payment is cancelled. The batch is rejected, two payments remain queued and gross settled is 0. |
+| Settlement | All three payments settle in one batch. Cancellation returns `ALREADY_SETTLED`. The winner's reply is withheld after commit, and retrying the same command on a new connection prints `reply_recovered=true`. |
+
+Copy the printed domain and command IDs to inspect the receipt with `pg receipt DOMAIN COMMAND`. Use `pg export DOMAIN history.json` and then `verify history.json` with the same launcher to verify the balances and settled members offline. Run `docker compose down` to stop this lab and retain its history. [CLI commands, connection settings and retry semantics](docs/cli.md)
+
+## Which receipts survive a primary failure?
+
+The failover experiment uses a separate two-bank fixture. It starts its own disposable primary and physical standby on dynamically assigned loopback ports. Use Java 21, Docker Compose and Python 3 (tested with 3.12 and 3.13). From the same installed directory, run one trial per replication mode. Choose a fresh output directory each time.
+
+**Windows PowerShell**
+
+```powershell
+python failover/run.py --mode both --repetitions 1 --out failover-evidence
+python failover/verify.py failover-evidence
+```
+
+**Linux**
+
+```sh
+python3 failover/run.py --mode both --repetitions 1 --out failover-evidence
+python3 failover/verify.py failover-evidence
+```
+
+The runner cuts replication, stops the old primary and promotes the standby. It saves the new primary's history before retrying any measured command. The offline verifier compares that snapshot with the receipts recorded by an external client. In **each of three published asynchronous trials**, one of six acknowledged commands was missing after promotion. It was a 7-unit settlement. In **each of three synchronous trials**, all five acknowledged commands survived. The 7-unit settlement waited for the disconnected standby and the client never received a commit acknowledgement for it from the old primary.
+
+Use `--repetitions 3` to reproduce the published trial count. The measurements describe two database instances on one Docker host under a controlled replication cut. [Fault sequence, raw evidence and timing results](docs/failover.md)
+
+## Benchmarks and tests
+
+| Question | Command arguments for the installed launcher | What to inspect |
+| --- | --- | --- |
+| How much volume do the policies settle over time? | `benchmark economic 20261119 32` | Both policies see the same arrivals over eight ticks. Compare gross volume, pending payments and waiting times. [Economic workloads](docs/economic-benchmark.md) |
+| What happens when four workers contend for one domain? | `pg capacity 4 128 4 42` | Start the single-primary lab first. The fixture settles 32 batches, moving 6,317 gross with 102,400 cash conserved. Lock waits and throughput depend on the host. [Capacity measurements](docs/capacity-benchmark.md) |
+
+From the repository root, run `.\gradlew.bat test` in PowerShell or `./gradlew test` on Linux for the unit and property tests. On Linux, `bash scripts/test-postgres.sh` runs the database integration suite and verifies both race orders and recovery after a PostgreSQL restart in an isolated Compose project. [Integration script](scripts/test-postgres.sh) · [Packaged application guide](docs/distribution.md) · [Apache 2.0 license](LICENSE)
