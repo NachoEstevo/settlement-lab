@@ -1,66 +1,85 @@
 # Settlement Lab architecture
 
-Settlement Lab studies how a group of indivisible payments can settle with limited cash. Its first milestone, F0, is an in-memory Java 21 terminal demonstration with synthetic obligations in one currency. It answers a mathematical question about a particular group of payments. The subsequent milestones add a durable authority, concurrent clients and a comparison of queue policies.
-
-In F0, the [CLI fixtures](../src/main/java/lab/settlement/cli/Demo.java) call a single-threaded [ledger](../src/main/java/lab/settlement/settlement/Ledger.java) that owns each payment's status and batch membership. Its [position calculator](../src/main/java/lab/settlement/domain/BatchPositions.java) uses `BigInteger` for sums. Each CLI invocation starts fresh. The `--race` option chooses which operation runs first, so the two outcomes can be examined before introducing independent workers.
-
-## A reference case
-
-Three participants each open with 20 units. A owes B 100, B owes C 100 and C owes A 100. Paying any of the obligations first would overdraw the sender. Executing all three simultaneously leaves every balance at 20 and settles a gross amount of 300. Remove the C-to-A obligation before settlement and every nonempty subset of the remaining two would overdraw someone. With zero opening balances and obligations of 100, 100 and 90 around the original ring, A would finish at −10. A directed cycle alone does not establish feasibility.
-
-For each participant, compute `closing = opening + incoming - outgoing` across the entire candidate. Each amount is positive and measured in whole minor units. Use exact integer arithmetic for intermediates. The target persistent representation permits balances from zero through the maximum signed 64-bit integer. Every accepted candidate must conserve total cash, respect each participant's balance bounds and settle each selected obligation in full. A net-zero cycle could be applied twice without changing any balance, which makes the identities of the settled obligations as important as the balances.
-
-The reference case is inspired by liquidity-saving mechanisms. This project sets its own experimental rules. [Bank of England guide to the CHAPS liquidity-saving mechanism](https://www.bankofengland.co.uk/-/media/boe/files/payments/liquidity-saving-mechanism-user-guide.pdf)
-
-## Planned durable authority
-
-The following diagram describes the intended architecture from F1 onward.
+Settlement Lab studies whether a specific group of indivisible payments can settle with limited cash. A Java 21 CLI runs the same three-participant example against two authorities. The in-memory ledger demonstrates the arithmetic. The JDBC authority also answers which command took effect when two sessions raced and a caller lost the reply. [Terminal quickstart](../README.md)
 
 ```mermaid
 flowchart LR
-    CLI[Java CLI] -->|submit or cancel| A[Settlement authority]
-    R[Snapshot reader] --> P[Candidate selection]
-    P -->|payment IDs and observed revision| A
-    A -->|single transaction| DB[(PostgreSQL primary)]
-    DB -->|queue and balances| R
-    DB -->|consistent export| V[Independent verifier]
+    CLI[Java CLI] -->|demo| M[In-memory ledger]
+    CLI -->|pg race| H[Race harness]
+    CLI -->|pg submit / cancel / settle| A[JDBC authority]
+    H -->|two independent command sessions| A
+    A -->|one transaction per command| DB[(PostgreSQL 18 primary)]
+    H -->|observe waiting backend| DB
+    CLI -->|pg export| E[History exporter]
+    DB -->|one read-only snapshot| E
+    E --> F[Versioned JSON file]
+    F --> V[Offline verifier]
+    CLI -->|verify| V
 ```
 
-The authority owns all writes to a settlement domain, including admissions and cancellations. A domain has one currency, fixed participants and opening balances, a queue and an increasing revision. A submitted payment stays queued until it settles in exactly one batch or a cancellation takes effect. Its terminal decision is permanent in the domain's history. A batch identifies its member payments. The verifier reconstructs balances from the openings and checks the memberships against the committed command, event history and terminal payment states.
+## Settlement invariants
 
-### Selection and commit
+A domain has one simulated currency, a fixed set of accounts and immutable opening balances. An obligation has a positive integer amount, two distinct endpoints and a stable payment ID. It starts queued. Cancellation and settlement are terminal. Each settled payment identifies exactly one committed batch. An unpaid obligation may exceed its sender's balance.
 
-1. Read the domain revision, the first bounded window of queued obligations by admission sequence, and their participants' balances in one short `REPEATABLE READ READ ONLY` transaction. Close the connection or transaction before searching for a candidate.
-2. Select a candidate in Java. Include its payment IDs, the observed revision and the policy version in the proposal. The snapshot can become stale before the authority receives it.
-3. On one JDBC connection, begin a `READ COMMITTED` transaction. Take a row lock on the domain with `SELECT ... FOR UPDATE`. Every writer follows the same discipline. Read the receipt, payments and balances in **subsequent SQL statements** so validation sees the transaction that released the lock. [PostgreSQL transaction isolation](https://www.postgresql.org/docs/18/transaction-iso.html)
-4. Revalidate membership, eligibility and all affected balances. A multilateral batch requires feasible closing balances. A strict FIFO proposal must still be a prefix of the current queue. Applying that prefix in admission order must keep **every intermediate balance** within bounds. A stale pair of offsetting payments could pass the net check even if its first sender spent its cash after the snapshot.
-5. On success, commit the batch, its exact membership, balances, new revision, history entry and command receipt together. A business rejection records a receipt without changing settlement state. Perform candidate search and external I/O outside the lock.
+A proposal names 1–128 distinct payments. For each participant, compute `current balance + incoming − outgoing` across all members using exact arithmetic. A batch is feasible when every closing balance is between zero and the maximum signed 64-bit integer. Its gross volume is the sum of member amounts, which can exceed 64 bits. The cash total equals the sum of the openings. A zero-net cycle could settle twice without changing any balance, so verification also needs the individual payment identities.
 
-Multiple app instances may propose overlapping batches. The domain lock limits write throughput, but it also gives cancellation and settlement a single durable order. If cancellation commits first, the overlapping proposal is rejected in full. If settlement commits first, the cancelling client can retrieve the batch that settled its payment. Reading a timestamp at a client cannot determine which happened.
+With openings of 20 each, the 100/100/100 ring settles 300 gross and closes each participant at 20. Removing C's obligation leaves A short by 80 if the remaining two settle. At zero openings, a 100/100/90 ring leaves A short by 10. The example is inspired by liquidity-saving mechanisms and uses its own experimental rules. [Bank of England guide to the CHAPS liquidity-saving mechanism](https://www.bankofengland.co.uk/-/media/boe/files/payments/liquidity-saving-mechanism-user-guide.pdf)
 
-### Identity, retries and availability
+## Transaction boundary
 
-| Identity | Responsibility |
+Flyway creates the schema. The domain row holds a revision and a queue sequence counter. Each state-changing command appends one event at the next revision. A batch can change many payments at that revision. The payment's batch foreign key represents membership. [Initial migration](../src/main/resources/db/migration/V1__settlement_authority.sql)
+
+1. The race fixture reads the current revision and queued payment IDs in one read-only `REPEATABLE READ` snapshot. It closes that transaction before either writer starts.
+2. Each writer opens a separate JDBC connection and starts a `READ COMMITTED` transaction. Its first business statement locks the domain row with `SELECT ... FOR UPDATE`. After acquiring the lock it reads the receipt and current state in separate statements. Each of these statements sees the preceding writer's commit. [PostgreSQL transaction isolation](https://www.postgresql.org/docs/18/transaction-iso.html)
+3. For a new settlement command, the authority checks the batch identity, proposal revision, every member's current eligibility and closing balances. An unrelated admission can advance the revision while all proposed members remain valid. Cancelling one member invalidates the whole proposal.
+4. A successful settlement commits the batch, member links, balances, revision, event and receipt together. A business rejection stores a receipt at the current revision. Independent domains have separate row locks. Within one domain all writers take the same lock, including submissions and cancellations. [JDBC authority](../src/main/java/lab/settlement/postgres/PgAuthority.java)
+
+## How the demo proves contention
+
+The selected first writer pauses after acquiring the domain row. The second writer starts its command on another backend. A third JDBC session reads the server's wait state and checks that `pg_blocking_pids(waiter_pid)` includes the first backend's PID. Only that observation releases the first writer. A deadline makes failure to observe the wait an error. The printed wait event identifies what the database waited on. [PostgreSQL session functions](https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-SESSION)
+
+```mermaid
+sequenceDiagram
+    participant H as Harness / observer
+    participant S as Settlement session
+    participant C as Cancellation session
+    participant P as PostgreSQL primary
+    S->>P: Lock domain row
+    P-->>S: Acquired
+    S-->>H: Holder reached barrier
+    H->>C: Start cancellation
+    C->>P: Request same row lock
+    H->>P: Read wait event and blocking backends
+    P-->>H: Settlement PID blocks cancellation PID
+    H->>S: Release barrier
+    S->>P: Commit batch, memberships, balances, event and receipt
+    P-->>C: Row lock acquired
+    C->>P: Read settled payment and commit cancellation receipt
+    P-->>C: ALREADY_SETTLED with batch ID
+```
+
+The diagram shows `settle-first`. In `cancel-first` the sessions change places. Cancellation commits while settlement is waiting. Settlement then reads the cancelled member and commits a rejection receipt. Each run uses a new domain, so both outcomes can be reproduced on the same database. [Race harness](../src/main/java/lab/settlement/demo/PgRace.java)
+
+## Receipts and recovery
+
+| Identity | Meaning within one domain |
 | --- | --- |
-| Payment ID | Identifies an obligation and its immutable terms within the domain. Another submission cannot create a duplicate with the same ID. |
-| Command ID | Identifies one normalized request. Repeating it returns the same terminal receipt. Different terms under the same command ID conflict. |
-| Batch ID | Identifies a committed group. Only a successful commit reserves this identity. |
+| Payment ID | Identifies the original endpoints and amount. Repeating submission under a different command ID cannot create a second obligation. |
+| Command ID | Identifies the normalized command type and complete payload. An identical retry returns its stored result. A different payload conflicts and preserves the original receipt. |
+| Batch ID | Identifies a committed group. Only a successful commit reserves the ID. |
 
-A dropped reply after `COMMIT` leaves the client uncertain. Retrying the same command on the primary must recover the receipt or safely execute it if the original transaction rolled back. A missing receipt in a single read can also mean the first attempt is still in flight. The target assumes one writable PostgreSQL 18 primary, durable storage, `fsync` enabled and `synchronous_commit=on`. Losing the primary pauses admissions and settlements. Losing its storage or promoting an asynchronous replica can lose an acknowledged commit.
+A caller can lose its connection while a commit is in flight. When the primary is reachable, query the receipt or resend the same command with its original ID and payload. If the previous attempt committed, the new transaction returns the stored receipt. If it rolled back, the retry can execute. A missing receipt on one read can also mean the previous request is still in flight.
 
-## How policies will be compared
+The demo injects a lost reply after JDBC reports a successful commit. It closes that session before returning the result to the caller. The client reconnects, reads the durable receipt and reissues the identical command. A separate integration test interrupts the transaction before commit to exercise rollback. The Linux recovery check starts fresh JVMs, restarts PostgreSQL on its original volume and compares the receipts and exported histories before and after replay. [Recovery check](../scripts/test-postgres.sh)
 
-Strict global FIFO takes the longest individually payable prefix in the window. The planned multilateral heuristic starts with the whole window and removes obligations until a feasible group emerges. It drops the most recent outgoing obligation of a deterministically selected deficit account, or the most recent incoming obligation of an account over its bound. Compare that result with FIFO and the empty set. Prefer higher gross volume, then more obligations, then the lexicographically earliest list of queue positions.
+The running system has one writable primary. The domain-lock contract assumes all payment writers use the authority. The supplied local database role also owns the schema so the demo can run migrations. If the primary is unavailable, admissions and settlements pause. Recovery assumes intact durable storage, `fsync=on` and `synchronous_commit=on`. Loss of the volume can lose committed history. Promoting a lagging asynchronous standby could also lose an acknowledged transaction. The lab exercises a primary restart with the same data and leaves failover for future work. [PostgreSQL standby durability](https://www.postgresql.org/docs/18/warm-standby.html#SYNCHRONOUS-REPLICATION)
 
-The reference oracle independently enumerates every subset for windows up to 12 payments. For example, A starts with 5 and owes B 4 then C 5. Dropping the most recent obligation selects 4. The optimum is 5. Report that difference alongside pending count and oldest pending age. Two policies use identical arrival times, cancellation order, window size, settlement opportunities and end time. An empty selection means that policy found no payable group within its window.
+## Independent verification
 
-## Milestones and verification
+The exporter reads the domain, accounts, payment rows, batches, receipts and events in one read-only `REPEATABLE READ` transaction. A versioned JSON file preserves exact monetary values as decimal strings. The offline verifier replays events in revision order from the openings, checks each terminal state and reconciles the settlement receipt's member IDs, event membership and materialized payment rows. It checks individual balances as well as aggregate cash and gross volume. This can expose a missing member or repeated debit even when a ring has zero net movement. [Exporter](../src/main/java/lab/settlement/verification/HistoryExport.java) · [Verifier](../src/main/java/lab/settlement/verification/HistoryVerifier.java)
 
-| Milestone | Evidence |
-| --- | --- |
-| F0 · In-memory domain | Run the balanced ring, cancellation-before-settlement and unequal ring examples. Check per-account feasibility, total cash and the identities contributing to gross settlement. |
-| F1 · Persistence | Store admissions, cancellations, proposals and receipts using JDBC, SQL migrations and a single PostgreSQL authority. |
-| F2 · Contention and recovery | Use barriers and two real database connections to force both cancellation orders. Interrupt a transaction before commit, drop a reply after commit and retry. Verify the exported history in each case. |
-| F3 · Selection quality | Compare bounded selection with global FIFO and the independent oracle. Retain both an improvement over FIFO and a suboptimal heuristic case as regression fixtures. |
-| F4 · Operation | Publish workloads, seeds, correctness checks, lock wait, commit latency and unsettled queue ages with the hardware and durability settings. |
-| F5 · Distribution | Run the documented demo from a clean distribution and verify migration compatibility once a previous version exists. |
+## Later milestones
+
+The current authority accepts explicit groups. F3 will compare two ways to select them. Strict FIFO takes the longest individually payable prefix of a window. The proposed multilateral heuristic starts with the whole window and drops a deficit account's most recent outgoing obligation or an overfunded account's most recent incoming obligation until the remainder is feasible. Compare that group with FIFO and the empty set, choosing by gross volume, then number of payments, then earliest queue positions. A FIFO commit will also need to revalidate the prefix and every intermediate balance under the domain lock.
+
+The planned oracle enumerates all subsets of up to 12 obligations. If A has 5 and owes B 4 followed by C 5, dropping the most recent obligation selects 4 while the optimum is 5. Both policies will receive the same arrivals, window, settlement opportunities and cutoff. Report volume and pending-payment ages alongside the gap to the oracle. F4 will measure workload and lock contention under load. F5 covers release packaging and migration compatibility.

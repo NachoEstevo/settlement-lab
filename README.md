@@ -1,14 +1,42 @@
 ```sh
-./gradlew -q run --args="demo cycle"
+docker compose up -d --wait
+./gradlew -q run --args="pg race cancel-first"
+./gradlew -q run --args="pg race settle-first --drop-reply"
 ```
 
 # Settlement Lab
 
-Three participants have 20 units each. A owes B 100, B owes C 100, and C owes A 100. None can pay first. The command above tries A's payment on its own, settles all three together, then shows what happens when C tries to cancel. The batch settles 300 units of obligations with 60 units of cash. The closing balance of each participant is 20.
+A, B and C have 20 units each and owe 100 around a ring. None can pay first. Together they can settle 300 with 60 units of cash, unless C cancels its payment first. The two commands race cancellation against settlement on independent PostgreSQL 18 connections. Each creates a fresh domain with the same opening balances and obligations.
 
-Run the command from the checkout in Windows PowerShell or a Linux shell with a JDK 21 installed. Set `JAVA_HOME` to the JDK directory when another Java version is the default. In Windows Command Prompt, use `gradlew.bat` in place of `./gradlew`. The first build downloads Gradle and the first test run downloads JUnit.
+Run the quickstart from the checkout with JDK 21 and Docker Compose in Windows PowerShell or a Linux shell. Set `JAVA_HOME` to the JDK directory when another Java version is the default. In Windows Command Prompt use `gradlew.bat` for `./gradlew`. Compose downloads the pinned database image and the Gradle Wrapper downloads the build tools and dependencies on first use.
 
-## Run the three fixtures
+| First writer | What PostgreSQL commits |
+| --- | --- |
+| Cancel | C's payment becomes `CANCELLED`. The waiting settlement sees the cancellation and rejects the entire batch. Two payments remain queued, gross settled is 0 and all balances stay at 20. |
+| Settle | The three payments become members of one batch. Gross settled is 300 and all balances stay at 20. The waiting cancellation returns `ALREADY_SETTLED` with the batch ID. |
+
+Look for `wait_event_type=Lock` and the three backend PIDs. The first writer holds the domain row until the observer sees its PID in PostgreSQL's list of blockers for the second writer. With `--drop-reply`, the demo closes the winning session after its commit and withholds the reply. It resends the same command on a fresh connection and prints `reply_recovered=true` once the result matches the stored receipt.
+
+## Inspect and verify a run
+
+Copy `domain` and `settle_command` from one race into the commands below in place of `DOMAIN` and `COMMAND`. A snapshot shows the live payment states. An export captures that domain's accounts, payments, batches, events and receipts in a versioned JSON file for offline verification.
+
+```sh
+./gradlew -q run --args="pg snapshot DOMAIN"
+./gradlew -q run --args="pg receipt DOMAIN COMMAND"
+./gradlew -q run --args="pg export DOMAIN build/history.json"
+./gradlew -q run --args="verify build/history.json"
+```
+
+The verifier replays the history from the opening balances, checks the identities of the settled members and reports the conserved balance and gross settled. A contradictory history exits with an error. For your own fixture, first run `./gradlew -q run --args="pg migrate"`. The CLI help lists commands to open a domain, submit or cancel a payment, settle a proposed group and inspect a payment by ID. Run `./gradlew -q run --args="--help"`.
+
+The local database listens on `127.0.0.1:55432`. Its database name, user and password are `settlement_lab`. For a different host port, set `SETTLEMENT_PORT` before starting Compose and set `SETTLEMENT_JDBC_URL` to the matching URL, such as `jdbc:postgresql://127.0.0.1:55433/settlement_lab`. The client also accepts `SETTLEMENT_DB_USER` and `SETTLEMENT_DB_PASSWORD`. Use `docker compose down` to stop the lab while retaining its named volume. Starting it again reconnects to the stored history. [Compose configuration](compose.yaml)
+
+**Windows time zones.** pgJDBC sends the JVM's time-zone ID when it connects. A Windows JVM can report `America/Buenos_Aires`, an alias missing from the Debian Trixie image's time-zone data. PostgreSQL then rejects the connection with SQLSTATE `22023`. Gradle's `run` task, the distributed launchers and the tests use `-Duser.timezone=UTC` in their JVMs. Windows keeps the host's configured time zone. [JVM configuration](build.gradle) · [pgJDBC startup parameters](https://github.com/pgjdbc/pgjdbc/blob/REL42.7.14/pgjdbc/src/main/java/org/postgresql/core/v3/ConnectionFactoryImpl.java#L422-L429)
+
+## In-memory fixtures
+
+With just the JDK, run the original F0 examples in Windows PowerShell or a Linux shell.
 
 ```sh
 ./gradlew -q run --args="demo cycle"
@@ -16,7 +44,7 @@ Run the command from the checkout in Windows PowerShell or a Linux shell with a 
 ./gradlew -q run --args="demo unequal"
 ```
 
-Each invocation opens a fresh in-memory ledger. `--race` chooses the order of two sequential operations. The default for the equal cycle is `settle-first`. The payment IDs `AB`, `BC` and `CA` identify transfers in the direction indicated by their letters.
+Each `demo` invocation opens a fresh in-memory ledger. Its `--race` option chooses the order of two sequential operations. The default for the equal cycle is `settle-first`. The payment IDs `AB`, `BC` and `CA` identify transfers in the direction indicated by their letters.
 
 | Fixture | Manual calculation | Closing state |
 | --- | --- | --- |
@@ -35,15 +63,16 @@ stateDiagram-v2
     QUEUED --> CANCELLED : cancel
 ```
 
-A batch names 1 to 128 distinct queued payments. For each participant the ledger computes `current balance + incoming − outgoing` across the complete proposal. It uses `BigInteger` for the calculation, gross volume and system totals. Before changing any payment or balance, it checks that every closing balance fits the range above and that their sum equals the sum of the openings. A successful batch records its ID on every member. Both terminal states are permanent for the life of that ledger.
+A batch names 1 to 128 distinct queued payments. For each participant the ledger computes `current balance + incoming − outgoing` across the complete proposal. It uses `BigInteger` for the calculation and gross volume. Each batch must keep every closing balance in range and conserve the total cash of the accounts it touches. The system total therefore stays equal to the sum of its openings. A successful batch records its ID on every member. Both terminal states are permanent for the life of that ledger.
 
-## Tests and help
+## Tests
 
 ```sh
 ./gradlew test
-./gradlew -q run --args="--help"
+docker compose up -d --wait
+./gradlew integrationTest
 ```
 
-The demo runs in one process and discards state on exit. Persistence, concurrent settlement and recovery are later milestones. The architecture notes describe that boundary and the planned authority. [Architecture](docs/architecture.md)
+On Linux, `bash scripts/test-postgres.sh` runs the integration suite and terminal recovery checks on an isolated Compose project. It runs both race orders, restarts PostgreSQL on its original volume, and checks the exported history and receipt after replay from a new JVM. The script removes its temporary project when finished. If Docker reports that its predefined address pools are exhausted, set `SETTLEMENT_TEST_SUBNET` to an unused private CIDR before running the script. [Recovery check](scripts/test-postgres.sh) · [Architecture](docs/architecture.md)
 
 The project uses the Gradle 9.9.2 Wrapper. Its distribution checksum is pinned in [gradle-wrapper.properties](gradle/wrapper/gradle-wrapper.properties). The Wrapper JAR has SHA-256 `621008afc4f5d59357fcf06ffa644dd5aade5e091bdc363742710445f73cdaf8`. Gradle publishes both reference values. [Distribution checksum](https://services.gradle.org/distributions/gradle-9.9.2-bin.zip.sha256) · [Wrapper JAR checksum](https://services.gradle.org/distributions/gradle-9.9.2-wrapper.jar.sha256)

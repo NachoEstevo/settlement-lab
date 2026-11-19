@@ -5,19 +5,35 @@ import java.util.List;
 
 public final class Main {
     private static final String HELP = """
-            ./gradlew -q run --args="demo cycle"
-            Windows PowerShell: .\\gradlew.bat -q run --args="demo cycle"
+            docker compose up -d --wait
+            ./gradlew -q run --args="pg race settle-first --drop-reply"
 
-            Settlement Lab runs deterministic in-memory examples in simulated whole units (SIM).
-            Each command starts with a fresh ledger.
+            PostgreSQL 18 (each race creates a fresh domain):
+            pg race cancel-first|settle-first [--drop-reply]
+            pg migrate
+            pg init DOMAIN ACCOUNT=OPENING...
+            pg submit DOMAIN COMMAND PAYMENT FROM TO AMOUNT
+            pg cancel DOMAIN COMMAND PAYMENT
+            pg settle DOMAIN COMMAND BATCH SNAPSHOT_REVISION PAYMENT...
+            pg receipt DOMAIN COMMAND
+            pg payment DOMAIN PAYMENT
+            pg snapshot DOMAIN
+            pg export DOMAIN FILE
+            verify FILE                      Verify an exported history offline.
 
+            IDs are UUIDs. Amounts and revisions are whole decimal integers.
+            Set SETTLEMENT_JDBC_URL, SETTLEMENT_DB_USER and SETTLEMENT_DB_PASSWORD
+            to connect to a different lab database.
+
+            In-memory examples (each command starts with a fresh ledger):
             demo cycle                       Settle the equal cycle, then try to cancel C's payment.
             demo cycle --race settle-first   Run the same order explicitly.
             demo cycle --race cancel-first   Cancel C's payment before proposing the group.
             demo unequal                     Propose a 100/100/90 cycle with zero opening funds.
             --help, -h                       Show this help.
 
-            The race option chooses a sequential order for the demo.
+            The in-memory examples use sequential order. The pg race waits until
+            PostgreSQL reports that one transaction is blocking the other.
             """;
 
     private Main() {}
@@ -31,6 +47,9 @@ public final class Main {
         if (command.isEmpty() || command.equals(List.of("--help")) || command.equals(List.of("-h"))) {
             out.print(HELP);
             return 0;
+        }
+        if (command.getFirst().equals("pg") || command.getFirst().equals("verify")) {
+            return PgCommands.run(command, out, err);
         }
 
         Demo demo;

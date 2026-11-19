@@ -53,6 +53,20 @@ class MainTest {
         assertTrue(invalid.err().contains("--help"));
     }
 
+    @Test
+    void postgresCommandsValidateArgumentsBeforeIssuingAWrite() {
+        var order = invoke("pg", "race", "other");
+        assertEquals(2, order.exitCode());
+        assertTrue(order.err().contains("cancel-first|settle-first"));
+        var shortId = invoke("pg", "cancel", "1-1-1-1-1", "1-1-1-1-1", "1-1-1-1-1");
+        assertEquals(2, shortId.exitCode());
+        assertTrue(shortId.err().contains("standard UUID"));
+        String id = "00000000-0000-0000-0000-000000000001";
+        var nonCanonical = invoke("pg", "submit", id, id, id, id, id, "01");
+        assertEquals(2, nonCanonical.exitCode());
+        assertTrue(nonCanonical.err().contains("decimal integer"));
+    }
+
     private record Run(int exitCode, String out, String err) {}
 
     private static Run invoke(String... args) {
