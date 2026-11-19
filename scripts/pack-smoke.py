@@ -100,6 +100,12 @@ def smoke(archive, postgres):
                                "  AB SETTLED batch=cycle", "  BC SETTLED batch=cycle",
                                "  CA SETTLED batch=cycle"])
         print("Native launcher verified the three-member cycle from outside the distribution.")
+        selection = run([str(launcher), "demo", "selection"], caller, env)
+        require_lines(selection, ["fifo-v1 queue_positions=[] gross=0 gap=300 (100%)",
+                                  "heuristic-v1 queue_positions=[1, 2, 3] gross=300 gap=0 (0%)",
+                                  "Hand-calculated optimum=5",
+                                  "heuristic-v1 queue_positions=[1] gross=4 gap=1 (20%)"])
+        print("Packaged selectors reproduced the blocked ring and the suboptimal choice.")
         if postgres:
             postgres_smoke(app, str(launcher), caller, env)
         if Path(env["GRADLE_USER_HOME"]).exists():
